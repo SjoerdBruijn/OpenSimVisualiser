@@ -25,7 +25,7 @@ Without the OpenSim API, the package can still parse measured markers, kinematic
 Clone the repository, enter its directory, and create an isolated environment:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/SjoerdBruijn/OpenSimVisualiser.git
 cd OpenSimVisualiser
 python -m venv .venv
 source .venv/bin/activate
