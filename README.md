@@ -10,6 +10,7 @@ OpenSimVisualiser is a desktop Python application for exploring an OpenSim model
 - animated kinematics, model markers, and measured markers;
 - ground-reaction force vectors and centres of pressure;
 - marker and ground-reaction-force plotting without an OpenSim model;
+- standalone C3D loading for marker data, force-platform data, or both;
 - muscle paths coloured by activation or EMG level;
 - playback speed, frame scrubbing, layer controls, and time-series charts;
 - a Python API for opening your own OpenSim trial.
@@ -19,7 +20,7 @@ OpenSimVisualiser is a desktop Python application for exploring an OpenSim model
 - Conda or Miniforge;
 - Git.
 
-The supplied Conda environment installs Python 3.12, OpenSim 4.5.2, Spyder, and all visualization dependencies. OpenSim comes from its official `opensim-org` channel.
+The supplied Conda environment installs Python 3.12, OpenSim 4.5.2, ezc3d, Spyder, and all visualization dependencies. OpenSim comes from its official `opensim-org` channel.
 
 ## Install
 
@@ -66,7 +67,10 @@ opensim-visualiser
 python -m OpenSimVisualiser
 ```
 
-Use **Load trial folder…** in the application to select another trial. Models (`.osim`), kinematics (`.sto` or `.mot`), markers (`.trc`), ground reactions (`.mot`), and activity/EMG (`.sto` or `.mot`) are all optional, but at least one plottable file must be selected. Marker and ground-reaction data can be viewed without a model.
+The application has two separate input routes:
+
+1. Use **Load trial folder…** for OpenSim-style inputs. Models (`.osim`), kinematics (`.sto` or `.mot`), markers (`.trc`), ground reactions (`.mot`), and activity/EMG (`.sto` or `.mot`) are optional, but at least one plottable file must be selected. Marker and ground-reaction data can be viewed without a model.
+2. Use **Load C3D file…** for one standalone `.c3d` file. The visualiser loads its marker data, force-platform data, or both with ezc3d. This route does not use an OpenSim model or any of the separate trial-file inputs.
 
 ## Python API
 
@@ -94,6 +98,18 @@ window = OpenSimVisualiser(
 ```
 
 Provide at least one model, kinematics, marker, or ground-reaction file. A model is only needed for model geometry, evaluated model markers, and muscle paths. When a model is supplied without kinematics, its default pose is used; marker or GRF timestamps drive playback when either data source is present.
+
+### Standalone C3D route
+
+To load marker and/or force-platform data directly from a C3D file:
+
+```python
+from OpenSimVisualiser import OpenSimVisualiser
+
+window = OpenSimVisualiser(c3d_path="path/to/trial.c3d")
+```
+
+The C3D route is separate from the OpenSim-style route above: pass only `c3d_path`. Do not combine it with `model_path`, `coordinate_path`, `marker_path`, `grf_path`, or `activity_path`. Markers are plotted when point data is present; ground-reaction forces are plotted when the C3D contains valid force-platform data. C3D coordinates are converted from the conventional Z-up frame used by ezc3d's force-platform calculations to the visualiser's Y-up frame.
 
 ## Development
 

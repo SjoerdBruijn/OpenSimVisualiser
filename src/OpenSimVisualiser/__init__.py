@@ -17,11 +17,13 @@ def OpenSimVisualiser(
     marker_path: str | Path | None = None,
     grf_path: str | Path | None = None,
     activity_path: str | Path | None = None,
+    c3d_path: str | Path | None = None,
 ) -> OpenSimVisualizerWindow:
     """Load any supplied model or trial data, then open the visualiser.
 
     A model is optional when marker, ground-reaction-force, or coordinate data
-    is supplied directly.
+    is supplied directly. ``c3d_path`` is a separate input route and cannot be
+    combined with any of the other path arguments.
     """
 
     from .data import _load_trial
@@ -33,5 +35,6 @@ def OpenSimVisualiser(
         marker_path=marker_path,
         grf_path=grf_path,
         activity_path=activity_path,
+        c3d_path=c3d_path,
     )
     return _launch(trial)

@@ -102,6 +102,8 @@ class OpenSimVisualizerWindow:
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         controls_layout.addWidget(title)
         source_names = []
+        if self.trial.c3d_path is not None:
+            source_names.append(f"C3D: {self.trial.c3d_path.name}")
         if self.trial.model_path is not None:
             source_names.append(f"Model: {self.trial.model_path.name}")
         if self.trial.marker_path is not None:
@@ -121,6 +123,9 @@ class OpenSimVisualizerWindow:
         load_folder_button = QtWidgets.QPushButton("Load trial folder…")
         load_folder_button.clicked.connect(self._load_trial_folder)
         controls_layout.addWidget(load_folder_button)
+        load_c3d_button = QtWidgets.QPushButton("Load C3D file…")
+        load_c3d_button.clicked.connect(self._load_c3d_file)
+        controls_layout.addWidget(load_c3d_button)
 
         controls_layout.addWidget(QtWidgets.QLabel("Layers"))
         self.layer_checks: dict[str, Any] = {}
@@ -258,8 +263,11 @@ class OpenSimVisualizerWindow:
             for index, label in enumerate(self.trial.model_marker_labels):
                 self.series_combo.addItem(f"Model: {label}", ("model", index))
         if self.trial.grf_forces is not None:
-            self.series_combo.addItem("GRF: right magnitude", ("grf", 0))
-            self.series_combo.addItem("GRF: left magnitude", ("grf", 1))
+            labels = self.trial.grf_labels or [
+                f"platform {index + 1}" for index in range(self.trial.grf_forces.shape[1])
+            ]
+            for index, label in enumerate(labels):
+                self.series_combo.addItem(f"GRF: {label} magnitude", ("grf", index))
         if self.series_combo.count() == 0:
             self.series_combo.addItem("No chart series", None)
 
@@ -269,6 +277,21 @@ class OpenSimVisualizerWindow:
             self._replace_trial(trial)
         except Exception as exc:
             self.QtWidgets.QMessageBox.critical(self.window, "Could not load example", str(exc))
+
+    def _load_c3d_file(self) -> None:
+        source_path = self.trial.c3d_path or Path.cwd()
+        file_name, _selected_filter = self.QtWidgets.QFileDialog.getOpenFileName(
+            self.window,
+            "Select a standalone C3D trial",
+            str(source_path if source_path.is_dir() else source_path.parent),
+            "C3D files (*.c3d);;All files (*)",
+        )
+        if not file_name:
+            return
+        try:
+            self._replace_trial(_load_trial(c3d_path=file_name))
+        except Exception as exc:
+            self.QtWidgets.QMessageBox.critical(self.window, "Could not load C3D", str(exc))
 
     def _load_trial_folder(self) -> None:
         source_path = next(
@@ -280,6 +303,7 @@ class OpenSimVisualizerWindow:
                     self.trial.grf_path,
                     self.trial.coordinate_path,
                     self.trial.activity_path,
+                    self.trial.c3d_path,
                 )
                 if path is not None
             ),
@@ -430,6 +454,7 @@ class OpenSimVisualizerWindow:
                     trial.marker_path,
                     trial.grf_path,
                     trial.coordinate_path,
+                    trial.c3d_path,
                 )
                 if path is not None
             ),
@@ -453,8 +478,9 @@ class OpenSimVisualizerWindow:
         self._model_label_poly = None
         self._force_actor = None
         self._cop_actor = None
-        self._force_arrow_actors: list[Any | None] = [None, None]
-        self._force_arrow_polys: list[Any | None] = [None, None]
+        grf_count = self.trial.grf_forces.shape[1] if self.trial.grf_forces is not None else 0
+        self._force_arrow_actors: list[Any | None] = [None] * grf_count
+        self._force_arrow_polys: list[Any | None] = [None] * grf_count
         self._cop_poly = None
         self._ground_actor = None
 
@@ -554,6 +580,12 @@ class OpenSimVisualizerWindow:
                 finite = values[np.isfinite(values).all(axis=2)]
                 if finite.size:
                     chunks.append(finite)
+        if self.trial.grf_points is not None:
+            finite_grf_points = self.trial.grf_points[
+                np.isfinite(self.trial.grf_points).all(axis=2)
+            ]
+            if finite_grf_points.size:
+                chunks.append(finite_grf_points)
         if not chunks:
             return (-1, 1, -1, 1, -1, 1)
         points = np.vstack(chunks)
@@ -561,7 +593,14 @@ class OpenSimVisualizerWindow:
         high = np.nanmax(points, axis=0)
         span = np.maximum(high - low, 0.5)
         pad = span * 0.08
-        return tuple(np.r_[low - pad, high + pad].tolist())  # type: ignore[return-value]
+        return (
+            float(low[0] - pad[0]),
+            float(high[0] + pad[0]),
+            float(low[1] - pad[1]),
+            float(high[1] + pad[1]),
+            float(low[2] - pad[2]),
+            float(high[2] + pad[2]),
+        )
 
     def _set_speed(self, _index: int) -> None:
         self.speed = float(self.speed_combo.currentData())
@@ -647,7 +686,7 @@ class OpenSimVisualizerWindow:
         if self.trial.grf_forces is None or self.trial.grf_points is None:
             return
         if self._cop_poly is None:
-            self._cop_poly = self.pv.PolyData(np.zeros((2, 3), dtype=float))
+            self._cop_poly = self.pv.PolyData(np.zeros((1, 3), dtype=float))
             self._cop_actor = self.plotter.add_mesh(
                 self._cop_poly,
                 color="#d95f02",
@@ -664,8 +703,8 @@ class OpenSimVisualizerWindow:
         origins = self._grf_origins()
         forces = self.trial.grf_forces[self.frame]
         cop_points: list[np.ndarray] = []
-        for side_index, (origin, force) in enumerate(zip(origins, forces)):
-            arrow_actor = self._force_arrow_actors[side_index]
+        for platform_index, (origin, force) in enumerate(zip(origins, forces)):
+            arrow_actor = self._force_arrow_actors[platform_index]
             if (
                 not np.isfinite(origin).all()
                 or not np.isfinite(force).all()
@@ -686,25 +725,23 @@ class OpenSimVisualizerWindow:
                 shaft_resolution=16,
                 scale=force_length,
             )
-            if self._force_arrow_polys[side_index] is None:
-                self._force_arrow_polys[side_index] = arrow.copy(deep=True)
-                self._force_arrow_actors[side_index] = self.plotter.add_mesh(
-                    self._force_arrow_polys[side_index],
+            if self._force_arrow_polys[platform_index] is None:
+                self._force_arrow_polys[platform_index] = arrow.copy(deep=True)
+                self._force_arrow_actors[platform_index] = self.plotter.add_mesh(
+                    self._force_arrow_polys[platform_index],
                     color="#31a354",
-                    name=f"grf-arrow-{side_index}",
+                    name=f"grf-arrow-{platform_index}",
                 )
             else:
-                self._force_arrow_polys[side_index].deep_copy(arrow)
-                if hasattr(self._force_arrow_polys[side_index], "Modified"):
-                    self._force_arrow_polys[side_index].Modified()
-            self._force_arrow_actors[side_index].SetVisibility(True)
+                self._force_arrow_polys[platform_index].deep_copy(arrow)
+                if hasattr(self._force_arrow_polys[platform_index], "Modified"):
+                    self._force_arrow_polys[platform_index].Modified()
+            self._force_arrow_actors[platform_index].SetVisibility(True)
         if cop_points:
-            cop_array = np.tile(cop_points[0], (2, 1))
-            for side_index, point in enumerate(cop_points):
-                cop_array[side_index] = point
+            cop_array = np.vstack(cop_points)
             visible = True
         else:
-            cop_array = np.zeros((2, 3), dtype=float)
+            cop_array = np.zeros((1, 3), dtype=float)
             visible = False
         self._cop_poly.points = cop_array
         if hasattr(self._cop_poly, "Modified"):

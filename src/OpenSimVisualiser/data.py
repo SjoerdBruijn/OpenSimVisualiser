@@ -44,6 +44,7 @@ class OpenSimTrial:
     marker_path: Path | None
     grf_path: Path | None
     activity_path: Path | None
+    c3d_path: Path | None
     times: np.ndarray
     coordinate_labels: list[str]
     coordinates: np.ndarray
@@ -54,6 +55,7 @@ class OpenSimTrial:
     grf_forces: np.ndarray | None = None
     grf_points: np.ndarray | None = None
     grf_torques: np.ndarray | None = None
+    grf_labels: list[str] = field(default_factory=list)
     geometry: list[GeometrySpec] = field(default_factory=list)
     muscle_labels: list[str] = field(default_factory=list)
     muscle_paths: list[list[np.ndarray]] = field(default_factory=list)
@@ -467,14 +469,256 @@ def _activity_for_muscles(
     return result
 
 
+def _c3d_scalar(value: Any, default: float = 0.0) -> float:
+    """Return the first numeric value from an ezc3d field."""
+
+    if value is None:
+        return default
+    values = np.asarray(value).reshape(-1)
+    return float(values[0]) if values.size else default
+
+
+def _c3d_text(value: Any, default: str = "") -> str:
+    """Return the first text value from an ezc3d field."""
+
+    if value is None:
+        return default
+    values = np.asarray(value, dtype=object).reshape(-1)
+    return str(values[0]).strip() if values.size else default
+
+
+def _c3d_parameter(c3d: Any, group: str, name: str, default: Any = None) -> Any:
+    try:
+        return c3d["parameters"][group][name]["value"]
+    except (KeyError, TypeError):
+        return default
+
+
+def _c3d_rate(c3d: Any, section: str, parameter_group: str) -> float:
+    try:
+        header_rate = _c3d_scalar(c3d["header"][section].get("frame_rate"))
+    except (KeyError, TypeError, AttributeError):
+        header_rate = 0.0
+    if header_rate > 0.0:
+        return header_rate
+    return _c3d_scalar(_c3d_parameter(c3d, parameter_group, "RATE"))
+
+
+def _c3d_length_scale(unit: str) -> float:
+    normalized = unit.strip().lower().replace(" ", "")
+    return {
+        "m": 1.0,
+        "meter": 1.0,
+        "metre": 1.0,
+        "cm": 0.01,
+        "centimeter": 0.01,
+        "centimetre": 0.01,
+        "mm": 0.001,
+        "millimeter": 0.001,
+        "millimetre": 0.001,
+    }.get(normalized, 1.0)
+
+
+def _c3d_force_scale(unit: str) -> float:
+    normalized = unit.strip().lower().replace(" ", "")
+    return {"n": 1.0, "kn": 1000.0}.get(normalized, 1.0)
+
+
+def _c3d_moment_scale(unit: str) -> float:
+    normalized = unit.strip().lower().replace(" ", "").replace("*", "")
+    return {"nm": 1.0, "ncm": 0.01, "nmm": 0.001, "knm": 1000.0}.get(
+        normalized, 1.0
+    )
+
+
+def _c3d_vector_series(value: Any, name: str) -> np.ndarray:
+    """Return a C3D vector series as samples-by-XYZ."""
+
+    array = np.asarray(value, dtype=float).squeeze()
+    if array.ndim == 1 and array.size == 3:
+        return array.reshape(1, 3)
+    if array.ndim != 2:
+        raise ValueError(f"C3D {name} data must be a two-dimensional vector series")
+    if array.shape[0] == 3:
+        return array.T
+    if array.shape[1] == 3:
+        return array
+    raise ValueError(f"C3D {name} data must have three vector components")
+
+
+def _c3d_z_up_to_y_up(values: np.ndarray) -> np.ndarray:
+    """Rotate C3D's conventional Z-up coordinates into the viewer's Y-up frame."""
+
+    return np.stack((values[..., 0], values[..., 2], -values[..., 1]), axis=-1)
+
+
+def _load_c3d_trial(c3d_path: Path) -> OpenSimTrial:
+    """Load markers and force-platform data from one standalone C3D file."""
+
+    try:
+        import ezc3d  # type: ignore
+    except Exception as exc:  # pragma: no cover - dependency supplied by the environment
+        raise RuntimeError("C3D loading requires the ezc3d package") from exc
+
+    try:
+        c3d = ezc3d.c3d(str(c3d_path), extract_forceplat_data=True)
+    except Exception as exc:
+        raise ValueError(f"Could not load C3D file {c3d_path}: {exc}") from exc
+
+    data = c3d["data"]
+    raw_points = np.asarray(data.get("points", np.empty((4, 0, 0))), dtype=float)
+    point_unit = _c3d_text(_c3d_parameter(c3d, "POINT", "UNITS"), "m")
+    marker_times: np.ndarray | None = None
+    marker_labels: list[str] = []
+    measured_markers: np.ndarray | None = None
+    point_rate = _c3d_rate(c3d, "points", "POINT")
+    point_start = 0.0
+    if point_rate > 0.0:
+        try:
+            first_frame = _c3d_scalar(c3d["header"]["points"].get("first_frame"))
+        except (KeyError, TypeError, AttributeError):
+            first_frame = 0.0
+        point_start = first_frame / point_rate
+
+    if (
+        raw_points.ndim == 3
+        and raw_points.shape[0] >= 3
+        and raw_points.shape[1] > 0
+        and raw_points.shape[2] > 0
+    ):
+        if point_rate <= 0.0:
+            raise ValueError("C3D marker data has no valid POINT:RATE")
+        marker_count = raw_points.shape[1]
+        frame_count = raw_points.shape[2]
+        positions = raw_points[:3, :, :].transpose(2, 1, 0)
+        positions *= _c3d_length_scale(point_unit)
+        measured_markers = _c3d_z_up_to_y_up(positions)
+        marker_times = point_start + np.arange(frame_count, dtype=float) / point_rate
+
+        labels = list(_c3d_parameter(c3d, "POINT", "LABELS", []))
+        marker_labels = [
+            str(labels[index]).strip() if index < len(labels) and str(labels[index]).strip()
+            else f"marker_{index + 1}"
+            for index in range(marker_count)
+        ]
+
+        residuals = np.asarray(
+            data.get("meta_points", {}).get("residuals", np.empty((0, 0, 0))),
+            dtype=float,
+        )
+        if residuals.ndim == 3 and residuals.shape[1:] == (marker_count, frame_count):
+            measured_markers[residuals[0].T < 0.0] = np.nan
+
+    platforms = list(data.get("platform", []))
+    platform_series: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    for index, platform in enumerate(platforms):
+        force = _c3d_vector_series(platform["force"], f"platform {index + 1} force")
+        force *= _c3d_force_scale(_c3d_text(platform.get("unit_force"), "N"))
+        force = _c3d_z_up_to_y_up(force)
+
+        if "center_of_pressure" in platform:
+            point = _c3d_vector_series(
+                platform["center_of_pressure"], f"platform {index + 1} center of pressure"
+            )
+            point *= _c3d_length_scale(
+                _c3d_text(platform.get("unit_position"), point_unit)
+            )
+            point = _c3d_z_up_to_y_up(point)
+        else:
+            point = np.full_like(force, np.nan)
+
+        if "moment" in platform:
+            torque = _c3d_vector_series(platform["moment"], f"platform {index + 1} moment")
+            torque *= _c3d_moment_scale(_c3d_text(platform.get("unit_moment"), "Nm"))
+            torque = _c3d_z_up_to_y_up(torque)
+        else:
+            torque = np.full_like(force, np.nan)
+        platform_series.append((force, point, torque))
+
+    force_times: np.ndarray | None = None
+    raw_forces = raw_points_of_application = raw_torques = None
+    if platform_series:
+        analog_rate = _c3d_rate(c3d, "analogs", "ANALOG")
+        if analog_rate <= 0.0:
+            raise ValueError("C3D force-platform data has no valid ANALOG:RATE")
+        force_start = point_start
+        if marker_times is None:
+            try:
+                first_analog_frame = _c3d_scalar(
+                    c3d["header"]["analogs"].get("first_frame")
+                )
+            except (KeyError, TypeError, AttributeError):
+                first_analog_frame = 0.0
+            force_start = first_analog_frame / analog_rate
+        force_frame_count = max(series[0].shape[0] for series in platform_series)
+        force_times = force_start + np.arange(force_frame_count, dtype=float) / analog_rate
+        platform_count = len(platform_series)
+        shape = (force_frame_count, platform_count, 3)
+        raw_forces = np.full(shape, np.nan, dtype=float)
+        raw_points_of_application = np.full(shape, np.nan, dtype=float)
+        raw_torques = np.full(shape, np.nan, dtype=float)
+        for index, (force, point, torque) in enumerate(platform_series):
+            local_times = force_start + np.arange(force.shape[0], dtype=float) / analog_rate
+            raw_forces[:, index, :] = _interp_array(local_times, force, force_times)
+            if point.shape[0] == force.shape[0]:
+                raw_points_of_application[:, index, :] = _interp_array(
+                    local_times, point, force_times
+                )
+            if torque.shape[0] == force.shape[0]:
+                raw_torques[:, index, :] = _interp_array(local_times, torque, force_times)
+
+    if marker_times is None and force_times is None:
+        raise ValueError("C3D file contains neither marker nor force-platform data")
+
+    times = marker_times if marker_times is not None else force_times
+    assert times is not None
+    grf_forces = grf_points = grf_torques = None
+    if force_times is not None:
+        assert raw_forces is not None
+        assert raw_points_of_application is not None
+        assert raw_torques is not None
+        grf_forces = _interp_array(force_times, raw_forces, times)
+        grf_points = _interp_array(force_times, raw_points_of_application, times)
+        grf_torques = _interp_array(force_times, raw_torques, times)
+        grf_points[np.linalg.norm(grf_forces, axis=2) <= 1.0] = np.nan
+
+    return OpenSimTrial(
+        model_path=None,
+        coordinate_path=None,
+        marker_path=None,
+        grf_path=None,
+        activity_path=None,
+        c3d_path=c3d_path,
+        times=times,
+        coordinate_labels=[],
+        coordinates=np.empty((times.size, 0), dtype=float),
+        measured_marker_labels=marker_labels,
+        measured_markers=measured_markers,
+        grf_forces=grf_forces,
+        grf_points=grf_points,
+        grf_torques=grf_torques,
+        grf_labels=[f"platform {index + 1}" for index in range(len(platform_series))],
+    )
+
+
 def _load_trial(
     model_path: str | Path | None = None,
     coordinate_path: str | Path | None = None,
     marker_path: str | Path | None = None,
     grf_path: str | Path | None = None,
     activity_path: str | Path | None = None,
+    c3d_path: str | Path | None = None,
 ) -> OpenSimTrial:
     """Load any supplied OpenSim model or trial files onto one timeline."""
+
+    c3d_path = Path(c3d_path).expanduser() if c3d_path else None
+    if c3d_path is not None:
+        if any((model_path, coordinate_path, marker_path, grf_path, activity_path)):
+            raise ValueError(
+                "c3d_path is a separate input route and cannot be combined with "
+                "model or trial files"
+            )
+        return _load_c3d_trial(c3d_path)
 
     model_path = Path(model_path).expanduser() if model_path else None
     coordinate_path = Path(coordinate_path).expanduser() if coordinate_path else None
@@ -558,6 +802,7 @@ def _load_trial(
         marker_path=marker_path,
         grf_path=grf_path,
         activity_path=activity_path,
+        c3d_path=None,
         times=times,
         coordinate_labels=coordinate_labels,
         coordinates=coordinates,
@@ -568,6 +813,7 @@ def _load_trial(
         grf_forces=grf_forces,
         grf_points=grf_points,
         grf_torques=grf_torques,
+        grf_labels=["right", "left"] if grf_forces is not None else [],
         geometry=geometry,
         muscle_labels=muscle_labels,
         muscle_paths=muscle_paths,

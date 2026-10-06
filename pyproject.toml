@@ -10,6 +10,7 @@ readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.10"
 dependencies = [
+    "ezc3d>=1.5",
     "numpy>=1.24",
     "PyQt5>=5.15",
     "pyqtgraph>=0.13",

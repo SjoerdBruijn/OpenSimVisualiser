@@ -8,6 +8,7 @@ channels:
 dependencies:
   - python=3.12
   - opensim=4.5.2
+  - ezc3d>=1.5
   - numpy>=1.24,<3
   - pyqt=5.15
   - pyqtgraph>=0.13
