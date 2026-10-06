@@ -15,16 +15,12 @@ OpenSimVisualiser is a desktop Python application for exploring an OpenSim model
 
 ## Requirements
 
-- Python 3.10 or newer (Python 3.11 or newer for the OpenSim 4.6 PyPI package);
-- the OpenSim Python API if you want model geometry, evaluated markers, and muscle paths.
+- Conda or Miniforge;
+- Git.
 
-The recommended Conda environment below installs OpenSim 4.5.2, matching the bundled example, from OpenSim's official `opensim-org` channel. OpenSim 4.6 and newer can also be installed from PyPI.
-
-Without the OpenSim API, the package can still parse measured markers, kinematics, and ground-reaction forces, but it cannot evaluate the OpenSim model itself.
+The supplied Conda environment installs Python 3.12, OpenSim 4.5.2, Spyder, and all visualization dependencies. OpenSim comes from its official `opensim-org` channel.
 
 ## Install
-
-### Conda and Spyder (recommended)
 
 Clone the repository and create the complete environment from `environment.yml`:
 
@@ -52,20 +48,6 @@ To refresh an existing environment after `environment.yml` changes:
 ```bash
 conda env update --file environment.yml --prune
 ```
-
-### `venv` and pip
-
-With Python 3.11 or newer, you can install OpenSim 4.6 and OpenSimVisualiser from PyPI and the repository instead:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install "opensim>=4.6"
-python -m pip install .
-```
-
-On Windows, activate a `venv` with `.venv\Scripts\activate` instead. If you already have an environment in which `import opensim` works, activate it and run only `python -m pip install .` there.
 
 Confirm that the bindings are available with:
 
@@ -109,12 +91,6 @@ The project uses a `src` layout, with the installable package in `src/OpenSimVis
 python -m pip install -e ".[dev]"
 python -m pytest
 python -m build
-```
-
-`requirements.txt` remains available as a convenience for editable local installs:
-
-```bash
-python -m pip install -r requirements.txt
 ```
 
 ## Bundled example data
