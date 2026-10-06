@@ -1,0 +1,2 @@
+# Install this project and its runtime dependencies in editable mode.
+-e .

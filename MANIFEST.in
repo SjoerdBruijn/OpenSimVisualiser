@@ -1,0 +1,4 @@
+include README.md
+recursive-include src/OpenSimVisualiser/example3DWalking *
+global-exclude *.py[cod]
+global-exclude __pycache__
