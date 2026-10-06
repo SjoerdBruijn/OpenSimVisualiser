@@ -100,3 +100,5 @@ The included `example3DWalking` bundle originates from the OpenSim 4.5 Python/Mo
 ## License
 
 OpenSimVisualiser is available under the [MIT License](LICENSE).
+
+This project was vibecoded using Codex GPT-5.6 Sol.
