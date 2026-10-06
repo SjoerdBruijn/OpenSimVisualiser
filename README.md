@@ -2,6 +2,8 @@
 
 OpenSimVisualiser is a desktop Python application for exploring an OpenSim model together with motion-capture and trial data. It ships with OpenSim's `example3DWalking` data, so you can launch a working example immediately after installation.
 
+![OpenSimVisualiser displaying the bundled walking example with model geometry, markers, muscles, and a time-series chart](docs/assets/opensim-visualiser.png)
+
 ## Features
 
 - interactive 3D model geometry with standard camera controls;
@@ -88,3 +90,7 @@ python -m pip install -r requirements.txt
 ## Bundled example data
 
 The included `example3DWalking` bundle originates from the OpenSim 4.5 Python/Moco examples. It contains the model, geometry meshes, kinematics, marker trajectories, ground-reaction forces, and electromyography data used by the default demo.
+
+## License
+
+OpenSimVisualiser is available under the [MIT License](LICENSE).
