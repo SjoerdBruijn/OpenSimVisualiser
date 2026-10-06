@@ -15,29 +15,59 @@ OpenSimVisualiser is a desktop Python application for exploring an OpenSim model
 
 ## Requirements
 
-- Python 3.10 or newer;
+- Python 3.10 or newer (Python 3.11 or newer for the OpenSim 4.6 PyPI package);
 - the OpenSim Python API if you want model geometry, evaluated markers, and muscle paths.
 
-The OpenSim Python API is normally supplied by an [OpenSim installation](https://opensim.stanford.edu/) rather than installed from PyPI. Install OpenSim first, activate the Python environment in which `import opensim` works, and then install OpenSimVisualiser into that environment.
+The recommended Conda environment below installs OpenSim 4.5.2, matching the bundled example, from OpenSim's official `opensim-org` channel. OpenSim 4.6 and newer can also be installed from PyPI.
 
 Without the OpenSim API, the package can still parse measured markers, kinematics, and ground-reaction forces, but it cannot evaluate the OpenSim model itself.
 
 ## Install
 
-Clone the repository, enter its directory, and create an isolated environment:
+### Conda and Spyder (recommended)
+
+Clone the repository and create the complete environment from `environment.yml`:
 
 ```bash
 git clone https://github.com/SjoerdBruijn/OpenSimVisualiser.git
 cd OpenSimVisualiser
+conda env create --file environment.yml
+conda activate opensim-visualiser
+```
+
+The environment includes OpenSim, Spyder, all visualization dependencies, and an editable installation of OpenSimVisualiser. Start Spyder from the activated environment so its console uses the correct interpreter:
+
+```bash
+spyder
+```
+
+You can use the Python API from Spyder or launch the bundled example from the same activated Conda environment:
+
+```bash
+opensim-visualiser
+```
+
+To refresh an existing environment after `environment.yml` changes:
+
+```bash
+conda env update --file environment.yml --prune
+```
+
+### `venv` and pip
+
+With Python 3.11 or newer, you can install OpenSim 4.6 and OpenSimVisualiser from PyPI and the repository instead:
+
+```bash
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
+python -m pip install "opensim>=4.6"
 python -m pip install .
 ```
 
-On Windows, activate the environment with `.venv\Scripts\activate` instead.
+On Windows, activate a `venv` with `.venv\Scripts\activate` instead. If you already have an environment in which `import opensim` works, activate it and run only `python -m pip install .` there.
 
-If OpenSim provides its own Conda environment, activate that environment and run only the final `python -m pip install .` command there. You can confirm that the bindings are available with:
+Confirm that the bindings are available with:
 
 ```bash
 python -c "import opensim; print(opensim.__version__)"

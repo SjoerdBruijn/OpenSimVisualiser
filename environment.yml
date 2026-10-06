@@ -1,0 +1,19 @@
+name: opensim-visualiser
+
+channels:
+  - opensim-org
+  - conda-forge
+  - nodefaults
+
+dependencies:
+  - python=3.12
+  - opensim=4.5.2
+  - numpy>=1.24,<3
+  - pyqt=5.15
+  - pyqtgraph>=0.13
+  - pyvista>=0.43
+  - pyvistaqt>=0.11
+  - spyder>=6,<7
+  - pip
+  - pip:
+      - -e .

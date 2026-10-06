@@ -1,5 +1,6 @@
 include README.md
 include LICENSE
+include environment.yml
 include docs/assets/opensim-visualiser.png
 recursive-include src/OpenSimVisualiser/example3DWalking *
 global-exclude *.py[cod]
