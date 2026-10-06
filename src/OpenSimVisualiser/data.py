@@ -39,7 +39,7 @@ class GeometrySpec:
 class OpenSimTrial:
     """All data needed by the visualiser, aligned to ``times``."""
 
-    model_path: Path
+    model_path: Path | None
     coordinate_path: Path | None
     marker_path: Path | None
     grf_path: Path | None
@@ -468,42 +468,87 @@ def _activity_for_muscles(
 
 
 def _load_trial(
-    model_path: str | Path,
+    model_path: str | Path | None = None,
     coordinate_path: str | Path | None = None,
     marker_path: str | Path | None = None,
     grf_path: str | Path | None = None,
     activity_path: str | Path | None = None,
 ) -> OpenSimTrial:
-    """Load an OpenSim model and associated trial files."""
+    """Load any supplied OpenSim model or trial files onto one timeline."""
 
-    model_path = Path(model_path).expanduser()
+    model_path = Path(model_path).expanduser() if model_path else None
     coordinate_path = Path(coordinate_path).expanduser() if coordinate_path else None
     marker_path = Path(marker_path).expanduser() if marker_path else None
     grf_path = Path(grf_path).expanduser() if grf_path else None
     activity_path = Path(activity_path).expanduser() if activity_path else None
 
-    coordinate_table = (
-        read_storage(coordinate_path)
-        if coordinate_path is not None
-        else _model_default_coordinate_table(model_path)
-    )
-    times = coordinate_table.times
     measured_labels: list[str] = []
-    measured_markers: np.ndarray | None = None
+    marker_data: tuple[np.ndarray, list[str], np.ndarray] | None = None
     if marker_path:
-        marker_times, measured_labels, marker_values = read_trc(marker_path)
+        marker_data = read_trc(marker_path)
+        measured_labels = marker_data[1]
+
+    grf_data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None
+    if grf_path:
+        grf_data = read_grf(grf_path)
+
+    if coordinate_path is not None:
+        coordinate_table = read_storage(coordinate_path)
+        times = coordinate_table.times
+    elif marker_data is not None:
+        times = marker_data[0]
+        coordinate_table = None
+    elif grf_data is not None:
+        times = grf_data[0]
+        coordinate_table = None
+    elif model_path is not None:
+        coordinate_table = _model_default_coordinate_table(model_path)
+        times = coordinate_table.times
+    else:
+        raise ValueError(
+            "Provide at least one model, coordinate, marker, or ground-reaction-force file"
+        )
+
+    if coordinate_table is None:
+        if model_path is not None:
+            defaults = _model_default_coordinate_table(model_path)
+            coordinate_labels = defaults.labels
+            coordinates = np.repeat(defaults.values, times.size, axis=0)
+        else:
+            coordinate_labels = []
+            coordinates = np.empty((times.size, 0), dtype=float)
+    else:
+        coordinate_labels = coordinate_table.labels
+        coordinates = coordinate_table.values
+
+    measured_markers: np.ndarray | None = None
+    if marker_data is not None:
+        marker_times, _marker_labels, marker_values = marker_data
         measured_markers = _interp_array(marker_times, marker_values, times)
 
     grf_forces = grf_points = grf_torques = None
-    if grf_path:
-        grf_times, raw_forces, raw_points, raw_torques = read_grf(grf_path)
+    if grf_data is not None:
+        grf_times, raw_forces, raw_points, raw_torques = grf_data
         grf_forces = _interp_array(grf_times, raw_forces, times)
         grf_points = _interp_array(grf_times, raw_points, times)
         grf_torques = _interp_array(grf_times, raw_torques, times)
 
-    model_labels, model_markers, geometry, muscle_labels, muscle_paths, opensim_error = _load_opensim_content(
-        model_path, coordinate_table.labels, coordinate_table.values, times
-    )
+    model_labels: list[str] = []
+    model_markers: np.ndarray | None = None
+    geometry: list[GeometrySpec] = []
+    muscle_labels: list[str] = []
+    muscle_paths: list[list[np.ndarray]] = []
+    opensim_error: str | None = None
+    if model_path is not None:
+        (
+            model_labels,
+            model_markers,
+            geometry,
+            muscle_labels,
+            muscle_paths,
+            opensim_error,
+        ) = _load_opensim_content(model_path, coordinate_labels, coordinates, times)
+
     muscle_activity = None
     if activity_path and muscle_labels:
         muscle_activity = _activity_for_muscles(activity_path, times, muscle_labels)
@@ -514,8 +559,8 @@ def _load_trial(
         grf_path=grf_path,
         activity_path=activity_path,
         times=times,
-        coordinate_labels=coordinate_table.labels,
-        coordinates=coordinate_table.values,
+        coordinate_labels=coordinate_labels,
+        coordinates=coordinates,
         measured_marker_labels=measured_labels,
         measured_markers=measured_markers,
         model_marker_labels=model_labels,
@@ -527,7 +572,7 @@ def _load_trial(
         muscle_labels=muscle_labels,
         muscle_paths=muscle_paths,
         muscle_activity=muscle_activity,
-        opensim_available=opensim_error is None,
+        opensim_available=model_path is not None and opensim_error is None,
         opensim_error=opensim_error,
     )
 

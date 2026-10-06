@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from OpenSimVisualiser.data import DEFAULT_BUNDLE, read_grf, read_storage, read_trc
+from OpenSimVisualiser.data import DEFAULT_BUNDLE, _load_trial, read_grf, read_storage, read_trc
 
 
 def test_bundled_example_is_available() -> None:
@@ -42,3 +43,43 @@ def test_default_bundle_path_is_inside_package() -> None:
     package_directory = Path(__import__("OpenSimVisualiser").__file__).resolve().parent
 
     assert DEFAULT_BUNDLE.parent == package_directory
+
+
+def test_load_markers_without_model() -> None:
+    trial = _load_trial(marker_path=DEFAULT_BUNDLE / "marker_trajectories.trc")
+
+    assert trial.model_path is None
+    assert trial.measured_markers is not None
+    assert trial.measured_markers.shape == (
+        trial.frame_count,
+        len(trial.measured_marker_labels),
+        3,
+    )
+    assert trial.coordinates.shape == (trial.frame_count, 0)
+
+
+def test_load_grf_without_model() -> None:
+    trial = _load_trial(grf_path=DEFAULT_BUNDLE / "grf_walk.mot")
+
+    assert trial.model_path is None
+    assert trial.grf_forces is not None
+    assert trial.grf_forces.shape == (trial.frame_count, 2, 3)
+    assert trial.measured_markers is None
+
+
+def test_load_markers_and_grf_without_model() -> None:
+    marker_times, _labels, _positions = read_trc(DEFAULT_BUNDLE / "marker_trajectories.trc")
+    trial = _load_trial(
+        marker_path=DEFAULT_BUNDLE / "marker_trajectories.trc",
+        grf_path=DEFAULT_BUNDLE / "grf_walk.mot",
+    )
+
+    assert np.array_equal(trial.times, marker_times)
+    assert trial.measured_markers is not None
+    assert trial.grf_forces is not None
+    assert trial.grf_forces.shape[0] == trial.frame_count
+
+
+def test_load_trial_requires_plottable_input() -> None:
+    with pytest.raises(ValueError, match="Provide at least one"):
+        _load_trial()

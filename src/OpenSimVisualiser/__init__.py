@@ -12,13 +12,17 @@ __all__ = ["OpenSimVisualiser"]
 
 
 def OpenSimVisualiser(
-    model_path: str | Path,
+    model_path: str | Path | None = None,
     coordinate_path: str | Path | None = None,
     marker_path: str | Path | None = None,
     grf_path: str | Path | None = None,
     activity_path: str | Path | None = None,
 ) -> OpenSimVisualizerWindow:
-    """Load an OpenSim model and optional trial data, then open the visualiser."""
+    """Load any supplied model or trial data, then open the visualiser.
+
+    A model is optional when marker, ground-reaction-force, or coordinate data
+    is supplied directly.
+    """
 
     from .data import _load_trial
     from .visualiser import _launch

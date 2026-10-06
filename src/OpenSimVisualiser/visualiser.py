@@ -101,7 +101,16 @@ class OpenSimVisualizerWindow:
         title = QtWidgets.QLabel("OpenSim visualiser")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         controls_layout.addWidget(title)
-        source = QtWidgets.QLabel(f"Model: {self.trial.model_path.name}")
+        source_names = []
+        if self.trial.model_path is not None:
+            source_names.append(f"Model: {self.trial.model_path.name}")
+        if self.trial.marker_path is not None:
+            source_names.append(f"Markers: {self.trial.marker_path.name}")
+        if self.trial.grf_path is not None:
+            source_names.append(f"GRF: {self.trial.grf_path.name}")
+        if self.trial.coordinate_path is not None:
+            source_names.append(f"Coordinates: {self.trial.coordinate_path.name}")
+        source = QtWidgets.QLabel("\n".join(source_names))
         source.setWordWrap(True)
         controls_layout.addWidget(source)
 
@@ -216,6 +225,12 @@ class OpenSimVisualizerWindow:
 
         if self.trial.opensim_error:
             self.status_label.setText(self.trial.opensim_error)
+        elif self.trial.model_path is None:
+            grf_status = "GRFs loaded" if self.trial.grf_forces is not None else "no GRFs"
+            self.status_label.setText(
+                f"{len(self.trial.measured_marker_labels)} measured markers, {grf_status}; "
+                "no model loaded"
+            )
         else:
             mapped_muscles = 0
             if self.trial.muscle_activity is not None:
@@ -256,10 +271,24 @@ class OpenSimVisualizerWindow:
             self.QtWidgets.QMessageBox.critical(self.window, "Could not load example", str(exc))
 
     def _load_trial_folder(self) -> None:
+        source_path = next(
+            (
+                path
+                for path in (
+                    self.trial.model_path,
+                    self.trial.marker_path,
+                    self.trial.grf_path,
+                    self.trial.coordinate_path,
+                    self.trial.activity_path,
+                )
+                if path is not None
+            ),
+            Path.cwd(),
+        )
         folder_name = self.QtWidgets.QFileDialog.getExistingDirectory(
             self.window,
             "Select an OpenSim trial folder",
-            str(self.trial.model_path.parent),
+            str(source_path if source_path.is_dir() else source_path.parent),
         )
         if not folder_name:
             return
@@ -268,11 +297,11 @@ class OpenSimVisualizerWindow:
         if selected is None:
             return
         model, coordinates, markers, grf, activity = selected
-        if model is None:
+        if model is None and coordinates is None and markers is None and grf is None:
             self.QtWidgets.QMessageBox.warning(
                 self.window,
-                "No OpenSim model",
-                "The selected folder needs a model (.osim). Kinematics are optional.",
+                "No plottable data selected",
+                "Select at least a model, kinematics, measured-marker, or ground-reaction file.",
             )
             return
         try:
@@ -298,16 +327,13 @@ class OpenSimVisualizerWindow:
         markers = sorted(folder.glob("*.trc"))
         grfs = sorted(folder.glob("*.mot"))
         activities = sorted(folder.glob("*.sto")) + sorted(folder.glob("*.mot"))
-        if not models:
-            return (None, None, None, None, None)
-
         dialog = QtWidgets.QDialog(self.window)
         dialog.setWindowTitle("Select OpenSim trial files")
         dialog.setMinimumWidth(620)
         layout = QtWidgets.QFormLayout(dialog)
         description = QtWidgets.QLabel(
-            "Choose a model and any files belonging to one trial. Kinematics, markers, "
-            "GRFs, and muscle activity/EMG can all be left empty."
+            "Choose the files belonging to one trial. A model is optional when plotting "
+            "measured markers or ground-reaction forces."
         )
         description.setWordWrap(True)
         layout.addRow(description)
@@ -317,6 +343,7 @@ class OpenSimVisualizerWindow:
             paths: list[Path],
             preferred: tuple[str, ...],
             optional: bool = False,
+            select_first: bool = False,
         ) -> QtWidgets.QComboBox:
             combo = QtWidgets.QComboBox()
             if optional:
@@ -324,12 +351,20 @@ class OpenSimVisualizerWindow:
             for path in paths:
                 combo.addItem(path.name, str(path))
             preferred_index = self._preferred_path_index(paths, preferred)
+            if preferred_index is None and select_first and paths:
+                preferred_index = 0
             if preferred_index is not None:
                 combo.setCurrentIndex(preferred_index + (1 if optional else 0))
             layout.addRow(label, combo)
             return combo
 
-        model_combo = add_selector("Model (.osim)", models, ("subject_walk_scaled.osim",))
+        model_combo = add_selector(
+            "Model (.osim)",
+            models,
+            ("subject_walk_scaled.osim",),
+            optional=True,
+            select_first=True,
+        )
         coordinate_combo = add_selector(
             "Kinematics (.sto/.mot)",
             kinematics,
@@ -341,6 +376,7 @@ class OpenSimVisualizerWindow:
             markers,
             ("marker_trajectories.trc",),
             optional=True,
+            select_first=True,
         )
         grf_combo = add_selector(
             "Ground reactions (.mot)",
@@ -382,13 +418,27 @@ class OpenSimVisualizerWindow:
         for name in preferred:
             if name.lower() in lowered:
                 return lowered[name.lower()]
-        return 0 if paths else None
+        return None
 
     def _replace_trial(self, trial: OpenSimTrial) -> None:
         self.pause()
+        display_path = next(
+            (
+                path
+                for path in (
+                    trial.model_path,
+                    trial.marker_path,
+                    trial.grf_path,
+                    trial.coordinate_path,
+                )
+                if path is not None
+            ),
+            None,
+        )
+        display_name = display_path.name if display_path is not None else "trial"
         self._replacement_window = OpenSimVisualizerWindow(
             trial,
-            title=f"OpenSim Python Visualiser — {trial.model_path.name}",
+            title=f"OpenSim Python Visualiser — {display_name}",
         )
         self._replacement_window.show()
         self.window.close()

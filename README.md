@@ -9,6 +9,7 @@ OpenSimVisualiser is a desktop Python application for exploring an OpenSim model
 - interactive 3D model geometry with standard camera controls;
 - animated kinematics, model markers, and measured markers;
 - ground-reaction force vectors and centres of pressure;
+- marker and ground-reaction-force plotting without an OpenSim model;
 - muscle paths coloured by activation or EMG level;
 - playback speed, frame scrubbing, layer controls, and time-series charts;
 - a Python API for opening your own OpenSim trial.
@@ -65,7 +66,7 @@ opensim-visualiser
 python -m OpenSimVisualiser
 ```
 
-Use **Load trial folder…** in the application to select another trial. A folder must contain an `.osim` model; kinematics (`.sto` or `.mot`), markers (`.trc`), ground reactions (`.mot`), and activity/EMG (`.sto` or `.mot`) are optional.
+Use **Load trial folder…** in the application to select another trial. Models (`.osim`), kinematics (`.sto` or `.mot`), markers (`.trc`), ground reactions (`.mot`), and activity/EMG (`.sto` or `.mot`) are all optional, but at least one plottable file must be selected. Marker and ground-reaction data can be viewed without a model.
 
 ## Python API
 
@@ -73,7 +74,7 @@ Use **Load trial folder…** in the application to select another trial. A folde
 from OpenSimVisualiser import OpenSimVisualiser
 
 window = OpenSimVisualiser(
-    model_path="path/to/model.osim",
+    model_path="path/to/model.osim",              # optional
     coordinate_path="path/to/coordinates.sto",  # optional
     marker_path="path/to/markers.trc",           # optional
     grf_path="path/to/forces.mot",               # optional
@@ -81,7 +82,18 @@ window = OpenSimVisualiser(
 )
 ```
 
-Only `model_path` is required. When `coordinate_path` is omitted, the model is shown as a one-frame static pose using the coordinate defaults stored in the model.
+To inspect measured markers, ground-reaction forces, or both without a model:
+
+```python
+from OpenSimVisualiser import OpenSimVisualiser
+
+window = OpenSimVisualiser(
+    marker_path="path/to/markers.trc",  # either marker_path or grf_path may be omitted
+    grf_path="path/to/forces.mot",
+)
+```
+
+Provide at least one model, kinematics, marker, or ground-reaction file. A model is only needed for model geometry, evaluated model markers, and muscle paths. When a model is supplied without kinematics, its default pose is used; marker or GRF timestamps drive playback when either data source is present.
 
 ## Development
 
