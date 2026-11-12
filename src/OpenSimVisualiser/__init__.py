@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,12 +19,16 @@ def OpenSimVisualiser(
     grf_path: str | Path | None = None,
     activity_path: str | Path | None = None,
     c3d_path: str | Path | None = None,
+    *,
+    geometry_paths: Iterable[str | Path] = (),
 ) -> OpenSimVisualizerWindow:
     """Load any supplied model or trial data, then open the visualiser.
 
     A model is optional when marker, ground-reaction-force, or coordinate data
     is supplied directly. ``c3d_path`` is a separate input route and cannot be
-    combined with any of the other path arguments.
+    combined with any of the other path arguments. Meshes are found beside
+    the model or in ancestor Geometry/data/Geometry folders. Use
+    ``geometry_paths`` for additional mesh directories.
     """
 
     from .data import _load_trial
@@ -36,5 +41,6 @@ def OpenSimVisualiser(
         grf_path=grf_path,
         activity_path=activity_path,
         c3d_path=c3d_path,
+        geometry_paths=geometry_paths,
     )
     return _launch(trial)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opensim-visualiser"
-version = "0.1.0"
+version = "0.1.1"
 description = "Interactive desktop visualiser for OpenSim models and trial data"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -55,6 +55,8 @@ OpenSimVisualiser = [
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+python_files = ["test_*.py", "check_*.py"]
+python_functions = ["test_*", "check_*"]
 
 [tool.ruff]
 target-version = "py310"
