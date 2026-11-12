@@ -133,6 +133,7 @@ class OpenSimVisualizerWindow:
             ("ground", "Ground plane", True),
             ("geometry", "Model geometry", bool(self.trial.geometry)),
             ("measured", "Measured markers", self.trial.measured_markers is not None),
+            ("measured_labels", "Experimental marker names", self.trial.measured_markers is not None),
             ("model_markers", "Model markers", self.trial.model_markers is not None),
             ("model_labels", "Model marker names", self.trial.model_markers is not None),
             ("muscles", "Muscles (activity colour)", bool(self.trial.muscle_paths)),
@@ -474,6 +475,8 @@ class OpenSimVisualizerWindow:
         self.plotter.add_axes()
         self._marker_measured = None
         self._marker_model = None
+        self._measured_label_actor = None
+        self._measured_label_poly = None
         self._model_label_actor = None
         self._model_label_poly = None
         self._force_actor = None
@@ -676,6 +679,7 @@ class OpenSimVisualizerWindow:
             self._model_poly.points = _finite_points(self.trial.model_markers, self.frame)
             if hasattr(self._model_poly, "Modified"):
                 self._model_poly.Modified()
+        self._update_measured_labels()
         self._update_model_labels()
         self._update_muscle_actor()
         self._update_force_actor()
@@ -747,6 +751,35 @@ class OpenSimVisualizerWindow:
         if hasattr(self._cop_poly, "Modified"):
             self._cop_poly.Modified()
         self._cop_actor.SetVisibility(visible)
+
+    def _update_measured_labels(self) -> None:
+        if self.trial.measured_markers is None:
+            return
+        show_labels = self.layer_checks["measured_labels"].isChecked()
+        if self._measured_label_poly is None:
+            self._measured_label_poly = self.pv.PolyData(
+                _finite_points(self.trial.measured_markers, self.frame)
+            )
+            self._measured_label_poly["labels"] = np.asarray(self.trial.measured_marker_labels)
+            self._measured_label_actor = self.plotter.add_point_labels(
+                self._measured_label_poly,
+                "labels",
+                font_size=10,
+                text_color="#e34a33",
+                shape="rounded_rect",
+                shape_color="#ffffff",
+                shape_opacity=0.72,
+                margin=2,
+                show_points=False,
+                always_visible=True,
+                name="measured-marker-labels",
+            )
+        else:
+            self._measured_label_poly.points = _finite_points(self.trial.measured_markers, self.frame)
+            if hasattr(self._measured_label_poly, "Modified"):
+                self._measured_label_poly.Modified()
+        if self._measured_label_actor is not None:
+            self._measured_label_actor.SetVisibility(show_labels)
 
     def _update_model_labels(self) -> None:
         if self.trial.model_markers is None:
@@ -858,6 +891,7 @@ class OpenSimVisualizerWindow:
             self._marker_measured.SetVisibility(self.layer_checks["measured"].isChecked())
         if self._marker_model is not None:
             self._marker_model.SetVisibility(self.layer_checks["model_markers"].isChecked())
+        self._update_measured_labels()
         self._update_model_labels()
         self._update_muscle_actor()
         self._update_force_actor()
