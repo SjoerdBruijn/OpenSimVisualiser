@@ -99,6 +99,43 @@ window = OpenSimVisualiser(
 
 Provide at least one model, kinematics, marker, or ground-reaction file. A model is only needed for model geometry, evaluated model markers, and muscle paths. When a model is supplied without kinematics, its default pose is used; marker or GRF timestamps drive playback when either data source is present.
 
+### Generated OpenSim files and geometry
+
+Pass the files produced by your analysis directly; no renamed TRC/MOT copies
+or mesh-path edits to the model are needed:
+
+```python
+window = OpenSimVisualiser(
+    model_path="output/participant_scaled.osim",
+    coordinate_path="output/lifting_ik.mot",
+    marker_path="data/lifting.trc",
+    grf_path="data/lifting_forces.mot",
+)
+```
+
+TRC marker names may contain spaces. Empty coordinate fields remain missing
+values, and the declared `m`, `cm`, or `mm` units are converted to metres.
+Ground reactions accept right/left labels, numbered plates, unnumbered forces,
+and other platform identifiers. Complete force triplets determine the number
+of platforms. Numbered platforms retain their file order and labels, without
+assuming which foot uses a plate. Force arrows use each platform's measured
+point of application. Forces use N, points use m, and free moments use N m.
+
+Geometry lookup first uses absolute or model-relative paths and the model's
+own `Geometry/` directory. It then checks any explicit `geometry_paths`, followed
+by `Geometry/` and `data/Geometry/` directories beside the model and its ancestor
+folders, nearest first. This finds a practical's supplied geometry when a scaled
+model lives below `output/` or `instructor output/`. It does not search recursively
+or depend on the console's working directory. For geometry stored elsewhere:
+
+```python
+window = OpenSimVisualiser(
+    model_path="output/participant_scaled.osim",
+    coordinate_path="output/lifting_ik.mot",
+    geometry_paths=["shared_models/Geometry"],
+)
+```
+
 ### Standalone C3D route
 
 To load marker and/or force-platform data directly from a C3D file:

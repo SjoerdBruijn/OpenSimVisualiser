@@ -6,14 +6,14 @@ arbitrary model/trial paths supplied through the public visualiser function.
 
 from __future__ import annotations
 
+import re
+import xml.etree.ElementTree as ET
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-import re
-from typing import Any, Iterable
-import xml.etree.ElementTree as ET
+from typing import Any
 
 import numpy as np
-
 
 DEFAULT_BUNDLE = Path(__file__).resolve().parent / "example3DWalking"
 
@@ -113,7 +113,9 @@ def read_storage(path: str | Path) -> StorageTable:
     return StorageTable(times=values[:, 0], labels=labels[1:], values=values[:, 1:])
 
 
-def _model_default_coordinate_table(model_path: Path) -> StorageTable:
+def _model_default_coordinate_table(
+    model_path: Path, *, geometry_paths: Iterable[Path] = (),
+) -> StorageTable:
     """Build a one-frame coordinate table from defaults stored in a model."""
 
     labels: list[str] = []
@@ -121,6 +123,7 @@ def _model_default_coordinate_table(model_path: Path) -> StorageTable:
     try:  # Prefer OpenSim so motion types and component paths are exact.
         import opensim as osim  # type: ignore
 
+        _register_model_geometry(osim, model_path, geometry_paths)
         model = osim.Model(str(model_path))
         model.initSystem()
         coordinates = model.getCoordinateSet()
@@ -168,7 +171,12 @@ def _model_default_coordinate_table(model_path: Path) -> StorageTable:
 
 
 def read_trc(path: str | Path) -> tuple[np.ndarray, list[str], np.ndarray]:
-    """Read a TRC file and return time, marker names, and positions in metres."""
+    """Read standard TRC labels, coordinate gaps and declared length units.
+
+    Tabs delimit fields, so marker names may contain spaces and empty
+    coordinate fields remain missing values. Positions are returned in metres.
+    Whitespace-delimited TRCs without empty fields are also accepted.
+    """
 
     path = Path(path)
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -179,32 +187,49 @@ def read_trc(path: str | Path) -> tuple[np.ndarray, list[str], np.ndarray]:
     if frame_index is None:
         raise ValueError(f"No Frame# header found in {path}")
 
-    labels = _split_fields(lines[frame_index])
-    # TRC stores the marker names once in the first header row; the X/Y/Z
-    # sublabels are on the following row and are not part of ``labels``.
-    marker_names = labels[2:]
+    def fields(line: str) -> list[str]:
+        return [value.strip() for value in line.split("\t")] if "\t" in line else line.split()
+
+    marker_names = [name for name in fields(lines[frame_index])[2:] if name]
+    if not marker_names:
+        raise ValueError(f"No marker names found in {path}")
+    units = "m"
+    for index, line in enumerate(lines[:frame_index]):
+        metadata = _split_fields(line)
+        keys = [key.casefold() for key in metadata]
+        if "units" in keys:
+            values = _split_fields(lines[index + 1])
+            unit_column = keys.index("units")
+            if unit_column >= len(values):
+                raise ValueError(f"Missing TRC length units in {path}")
+            units = values[unit_column].casefold()
+            break
+    unit_scales = {"m": 1.0, "mm": 0.001, "cm": 0.01}
+    if units not in unit_scales:
+        raise ValueError(f"Unsupported TRC length units {units!r} in {path}")
+
+    width = 2 + 3 * len(marker_names)
     rows: list[list[float]] = []
-    for line in lines[frame_index + 2 :]:
-        fields = _split_fields(line)
-        if len(fields) < 2 + 3 * len(marker_names):
+    for line_index in range(frame_index + 2, len(lines)):
+        line = lines[line_index]
+        if not line.strip():
             continue
+        values = fields(line)
+        if len(values) < 2 or not values[0] or not values[1]:
+            raise ValueError(f"Missing TRC frame/time in {path}, line {line_index + 1}")
+        if any(values[width:]):
+            raise ValueError(f"Extra TRC coordinates in {path}, line {line_index + 1}")
+        values = values[:width] + [""] * max(0, width - len(values))
         try:
-            rows.append([float(value) for value in fields[: 2 + 3 * len(marker_names)]])
-        except ValueError:
-            continue
+            rows.append([float(value) if value else np.nan for value in values])
+        except ValueError as exc:
+            raise ValueError(f"Invalid TRC number in {path}, line {line_index + 1}") from exc
     if not rows:
         raise ValueError(f"No marker data found in {path}")
 
     values = np.asarray(rows, dtype=float)
     positions = values[:, 2:].reshape(len(rows), len(marker_names), 3)
-    units_line = next((line.lower() for line in lines[:frame_index] if "units" in line.lower()), "")
-    # The bundled example is in millimetres.  Treat centimetres similarly;
-    # metre-valued TRCs are left unchanged.
-    if "mm" in units_line:
-        positions /= 1000.0
-    elif re.search(r"\bcm\b", units_line):
-        positions /= 100.0
-    return values[:, 1], marker_names, positions
+    return values[:, 1], marker_names, positions * unit_scales[units]
 
 
 def _column_group(labels: Iterable[str], prefix: str, suffixes: tuple[str, str, str]) -> list[int] | None:
@@ -219,29 +244,62 @@ def _column_group(labels: Iterable[str], prefix: str, suffixes: tuple[str, str, 
     return indexes
 
 
-def read_grf(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Read forces, CoP/point-of-application, and torques from an OpenSim MOT."""
+def _grf_prefixes(labels: Iterable[str]) -> list[tuple[str, str, str]]:
+    """Identify complete force triplets without assigning numbered plates to feet."""
 
-    table = read_storage(path)
-    forces = np.full((table.times.size, 2, 3), np.nan, dtype=float)
+    labels = list(labels)
+    groups: dict[str, tuple[str, str, str]] = {}
+    for label in labels:
+        match = re.fullmatch(r"ground_force_(?:(.+)_)?v[xyz]", label)
+        if match is None:
+            continue
+        identifier = match.group(1) or ""
+        suffix = f"{identifier}_" if identifier else ""
+        force_prefix = f"ground_force_{suffix}"
+        if _column_group(labels, force_prefix, ("vx", "vy", "vz")) is None:
+            continue
+        name = {"r": "right", "l": "left"}.get(identifier, f"platform {identifier or 1}")
+        groups[identifier] = (name, force_prefix, f"ground_torque_{suffix}")
+    if not groups:
+        raise ValueError("No complete ground_force_*_v{x,y,z} triplets found")
+    # Retain the bundled right/left ordering; other identifiers retain file order.
+    identifiers = [key for key in ("r", "l") if key in groups]
+    identifiers.extend(key for key in groups if key not in ("r", "l"))
+    return [groups[key] for key in identifiers]
+
+
+def _read_grf_table(
+    table: StorageTable,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
+    groups = _grf_prefixes(table.labels)
+    forces = np.full((table.times.size, len(groups), 3), np.nan, dtype=float)
     points = np.full_like(forces, np.nan)
     torques = np.full_like(forces, np.nan)
-    for side_index, side in enumerate(("ground_force_r_", "ground_force_l_")):
-        force_columns = _column_group(table.labels, side, ("vx", "vy", "vz"))
-        point_columns = _column_group(table.labels, side, ("px", "py", "pz"))
-        torque_columns = _column_group(table.labels, f"ground_torque_{side[-2]}_", ("x", "y", "z"))
-        if force_columns:
-            forces[:, side_index, :] = table.values[:, force_columns]
+    for platform_index, (_name, force_prefix, torque_prefix) in enumerate(groups):
+        force_columns = _column_group(table.labels, force_prefix, ("vx", "vy", "vz"))
+        point_columns = _column_group(table.labels, force_prefix, ("px", "py", "pz"))
+        torque_columns = _column_group(table.labels, torque_prefix, ("x", "y", "z"))
+        forces[:, platform_index, :] = table.values[:, force_columns]
         if point_columns:
-            points[:, side_index, :] = table.values[:, point_columns]
+            points[:, platform_index, :] = table.values[:, point_columns]
         if torque_columns:
-            torques[:, side_index, :] = table.values[:, torque_columns]
-    # Active point-of-application values in this OpenSim MOT are metres. The
-    # very large values present in zero-force rows are invalid placeholders,
-    # so discard those rows instead of using them to infer a unit conversion.
+            torques[:, platform_index, :] = table.values[:, torque_columns]
+    # CoP values are metres; zero-force samples can contain invalid placeholders.
     active = np.linalg.norm(forces, axis=2) > 1.0
     points[~active] = np.nan
-    return table.times, forces, points, torques
+    return table.times, forces, points, torques, [group[0] for group in groups]
+
+
+def read_grf(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Read side-labelled, numbered or unnumbered OpenSim ground reactions.
+
+    Complete force triplets determine the number of platforms. Forces are N,
+    points of application are m, and free moments are N m. Numbered platforms
+    retain their file order and are not assumed to belong to a particular foot.
+    """
+
+    times, forces, points, torques, _labels = _read_grf_table(read_storage(path))
+    return times, forces, points, torques
 
 
 def _interp_array(source_times: np.ndarray, source: np.ndarray, target_times: np.ndarray) -> np.ndarray:
@@ -264,15 +322,46 @@ def _as_float_array(vec: Any) -> np.ndarray:
     return np.asarray([float(vec[i]) for i in range(3)], dtype=float)
 
 
-def _geometry_mesh_path(model_path: Path, mesh_file: str) -> Path:
-    candidate = Path(mesh_file)
-    if candidate.is_absolute() and candidate.exists():
+def _geometry_directories(
+    model_path: Path, geometry_paths: Iterable[Path] = (),
+) -> list[Path]:
+    model_directory = model_path.resolve().parent
+    directories = [model_directory / "Geometry", *geometry_paths]
+    for directory in (model_directory, *model_directory.parents):
+        directories.extend((directory / "Geometry", directory / "data" / "Geometry"))
+    return list(dict.fromkeys(directories))
+
+
+def _register_model_geometry(
+    osim: Any, model_path: Path, geometry_paths: Iterable[Path] = (),
+) -> None:
+    # OpenSim searches registered directories in reverse order. Register before
+    # constructing the model so native geometry loading follows the viewer too.
+    for directory in reversed(_geometry_directories(model_path, geometry_paths)):
+        if directory.is_dir():
+            osim.ModelVisualizer.addDirToGeometrySearchPaths(str(directory))
+
+
+def _geometry_mesh_path(
+    model_path: Path,
+    mesh_file: str,
+    *,
+    geometry_paths: Iterable[Path] = (),
+) -> Path:
+    """Find meshes beside a model, in supplied paths, or in ancestor data folders."""
+
+    model_path = model_path.resolve()
+    candidate = Path(mesh_file.replace("\\", "/")).expanduser()
+    if candidate.is_absolute() and candidate.is_file():
         return candidate
     candidates = [model_path.parent / candidate, model_path.parent / "Geometry" / candidate.name]
+    # Check explicit folders, never a recursive filename search or the cwd.
+    for directory in _geometry_directories(model_path, geometry_paths):
+        candidates.extend((directory / candidate, directory / candidate.name))
     for item in candidates:
-        if item.exists():
-            return item
-    return candidates[-1]
+        if item.is_file():
+            return item.resolve()
+    return (model_path.parent / "Geometry" / candidate.name).resolve()
 
 
 def _geometry_xml(geometry: Any) -> ET.Element | None:
@@ -288,6 +377,8 @@ def _load_opensim_content(
     coordinate_labels: list[str],
     coordinate_values: np.ndarray,
     times: np.ndarray,
+    *,
+    geometry_paths: Iterable[Path] = (),
 ) -> tuple[
     list[str],
     np.ndarray | None,
@@ -304,6 +395,7 @@ def _load_opensim_content(
         return [], None, [], [], [], f"OpenSim Python API unavailable: {exc}"
 
     try:  # pragma: no cover - the API is supplied by the user's OpenSim install
+        _register_model_geometry(osim, model_path, geometry_paths)
         model = osim.Model(str(model_path))
         state = model.initSystem()
         coordinates = model.getCoordinateSet()
@@ -364,9 +456,10 @@ def _load_opensim_content(
                     opacity = float(geometry.getOpacity())
                 except Exception:
                     opacity = 1.0
-                geometry_records.append(
-                    (geometry, _geometry_mesh_path(model_path, mesh_element.text.strip()), scale, color, opacity)
+                mesh_path = _geometry_mesh_path(
+                    model_path, mesh_element.text.strip(), geometry_paths=geometry_paths
                 )
+                geometry_records.append((geometry, mesh_path, scale, color, opacity))
 
         transforms_by_geometry = [
             np.repeat(np.eye(4, dtype=float)[None, :, :], times.size, axis=0)
@@ -708,12 +801,15 @@ def _load_trial(
     grf_path: str | Path | None = None,
     activity_path: str | Path | None = None,
     c3d_path: str | Path | None = None,
+    *,
+    geometry_paths: Iterable[str | Path] = (),
 ) -> OpenSimTrial:
     """Load any supplied OpenSim model or trial files onto one timeline."""
 
+    geometry_paths = tuple(Path(path).expanduser().resolve() for path in geometry_paths)
     c3d_path = Path(c3d_path).expanduser() if c3d_path else None
     if c3d_path is not None:
-        if any((model_path, coordinate_path, marker_path, grf_path, activity_path)):
+        if any((model_path, coordinate_path, marker_path, grf_path, activity_path, geometry_paths)):
             raise ValueError(
                 "c3d_path is a separate input route and cannot be combined with "
                 "model or trial files"
@@ -732,9 +828,9 @@ def _load_trial(
         marker_data = read_trc(marker_path)
         measured_labels = marker_data[1]
 
-    grf_data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None
+    grf_data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]] | None = None
     if grf_path:
-        grf_data = read_grf(grf_path)
+        grf_data = _read_grf_table(read_storage(grf_path))
 
     if coordinate_path is not None:
         coordinate_table = read_storage(coordinate_path)
@@ -746,7 +842,7 @@ def _load_trial(
         times = grf_data[0]
         coordinate_table = None
     elif model_path is not None:
-        coordinate_table = _model_default_coordinate_table(model_path)
+        coordinate_table = _model_default_coordinate_table(model_path, geometry_paths=geometry_paths)
         times = coordinate_table.times
     else:
         raise ValueError(
@@ -755,7 +851,7 @@ def _load_trial(
 
     if coordinate_table is None:
         if model_path is not None:
-            defaults = _model_default_coordinate_table(model_path)
+            defaults = _model_default_coordinate_table(model_path, geometry_paths=geometry_paths)
             coordinate_labels = defaults.labels
             coordinates = np.repeat(defaults.values, times.size, axis=0)
         else:
@@ -771,8 +867,9 @@ def _load_trial(
         measured_markers = _interp_array(marker_times, marker_values, times)
 
     grf_forces = grf_points = grf_torques = None
+    grf_labels: list[str] = []
     if grf_data is not None:
-        grf_times, raw_forces, raw_points, raw_torques = grf_data
+        grf_times, raw_forces, raw_points, raw_torques, grf_labels = grf_data
         grf_forces = _interp_array(grf_times, raw_forces, times)
         grf_points = _interp_array(grf_times, raw_points, times)
         grf_torques = _interp_array(grf_times, raw_torques, times)
@@ -791,7 +888,9 @@ def _load_trial(
             muscle_labels,
             muscle_paths,
             opensim_error,
-        ) = _load_opensim_content(model_path, coordinate_labels, coordinates, times)
+        ) = _load_opensim_content(
+            model_path, coordinate_labels, coordinates, times, geometry_paths=geometry_paths
+        )
 
     muscle_activity = None
     if activity_path and muscle_labels:
@@ -813,7 +912,7 @@ def _load_trial(
         grf_forces=grf_forces,
         grf_points=grf_points,
         grf_torques=grf_torques,
-        grf_labels=["right", "left"] if grf_forces is not None else [],
+        grf_labels=grf_labels,
         geometry=geometry,
         muscle_labels=muscle_labels,
         muscle_paths=muscle_paths,
